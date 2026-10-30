@@ -1,0 +1,11 @@
+{
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "tiles-website",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-08-16",
+  "assets": {
+    "directory": "./public",
+    "run_worker_first": ["/api/*"]
+  },
+  "routes": [{ "pattern": "tiles.starb.ca", "custom_domain": true }]
+}

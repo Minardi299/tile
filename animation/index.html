@@ -1,0 +1,834 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gạch Bông: how it works</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Be+Vietnam+Pro:wght@400;500;600&display=swap">
+<style>
+  html, body { margin: 0; height: 100%; background: #0e0d0b; overflow: hidden; }
+  #player { position: fixed; inset: 0; display: grid; place-items: center; }
+  #stage { width: min(100vw, calc(100vh * 9 / 16)); height: auto; aspect-ratio: 9 / 16; display: block; }
+  .capture #stage { width: 1080px; height: 1920px; }
+  .d { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; }
+  .b { font-family: "Be Vietnam Pro", system-ui, sans-serif; }
+  .m { font-family: "STIX Two Text", "Cambria Math", "DejaVu Serif", serif; font-style: italic; }
+  .bar {
+    position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; gap: 10px; align-items: center;
+    padding: 6px 14px; border-radius: 999px; background: rgba(0, 0, 0, 0.6); color: #efe7d6; font: 13px system-ui, sans-serif;
+  }
+  .capture .bar { display: none; }
+  .bar button { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 2px 6px; }
+  .bar input { width: min(60vw, 420px); accent-color: #d9a441; }
+</style>
+</head>
+<body>
+<div id="player">
+  <svg id="stage" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1080 1920"></svg>
+</div>
+<div class="bar">
+  <button id="play" type="button" aria-label="Play or pause">Pause</button>
+  <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Time">
+  <span id="clock">0:00</span>
+</div>
+
+<script src="../public/tile.js"></script>
+<script>
+(() => {
+  const Q = new URLSearchParams(location.search);
+  const SEED = Q.get('seed') || 'hoa';
+  const CAPTURE = Q.has('capture');
+  const END_URL = 'tiles.starb.ca';
+  const MORE_WORDS = ['hội an', 'sen', 'mai'];
+  if (CAPTURE) document.body.classList.add('capture');
+
+  // ===== Colors and helpers =====
+  const C = { bg: '#1a1815', ink: '#efe7d6', dim: '#8a8174', faint: '#38342d', ochre: '#d9a441', terra: '#cf5a3c', jade: '#4f9a68', cream: '#efe3cc', blue: '#5b86b8' };
+  const TAU = Math.PI * 2, RAD = Math.PI / 180;
+  const cl = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+  const seg = (t, a, b) => cl((t - a) / (b - a));
+  const ez = x => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+  const eo = x => 1 - Math.pow(1 - x, 3);
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const win = (t, a, b, f = 0.35) => seg(t, a, a + f) * (1 - seg(t, b - f, b));
+  const hx = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16));
+  const mix = (a, b, t) => {
+    const A = hx(a), B = hx(b);
+    return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * t)).join(',')})`;
+  };
+  const kebab = k => k.replace(/[A-Z]/g, m => '-' + m.toLowerCase());
+  const n2 = v => (typeof v === 'number' ? +v.toFixed(2) : v);
+  const at = o => Object.entries(o || {}).map(([k, v]) => (v == null ? '' : ` ${kebab(k)}="${n2(v)}"`)).join('');
+  const G = (o, inner) => `<g${at(o)}>${inner}</g>`;
+  const P = (d, o) => `<path d="${d}"${at(o)}/>`;
+  const Ci = (x, y, r, o) => `<circle cx="${n2(x)}" cy="${n2(y)}" r="${n2(Math.max(r, 0))}"${at(o)}/>`;
+  const Ln = (x1, y1, x2, y2, o) => `<line x1="${n2(x1)}" y1="${n2(y1)}" x2="${n2(x2)}" y2="${n2(y2)}"${at(o)}/>`;
+  const Rc = (x, y, w, h, o) => `<rect x="${n2(x)}" y="${n2(y)}" width="${n2(w)}" height="${n2(h)}"${at(o)}/>`;
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const T = (x, y, s, o = {}) => {
+    const { size = 44, weight = 500, fill = C.ink, anchor = 'middle', fam = 'b', op = 1, ls = 0, tr } = o;
+    return `<text x="${n2(x)}" y="${n2(y)}" class="${fam}" font-size="${size}" font-weight="${weight}" fill="${fill}" text-anchor="${anchor}" opacity="${n2(op)}"${ls ? ` letter-spacing="${ls}"` : ''}${tr ? ` transform="${tr}"` : ''}>${esc(s)}</text>`;
+  };
+  const CX = 540, CY = 860;
+  const stageG = inner => G({ transform: `translate(${CX} ${CY})` }, inner);
+
+  // ===== Petal shapes (same data as tile.js) =====
+  const SHAPES = {
+    almond: [[[0.3, 1.33], [0.7, 1.33], [1, 0]]],
+    teardrop: [[[0.18, 0.2], [0.32, 1], [0.62, 1]], [[0.84, 1], [1, 0.55], [1, 0]]],
+    spoon: [[[0, 0.45], [0.2, 0.75], [0.5, 0.8]], [[0.8, 0.85], [1, 0.6], [1, 0]]],
+    heart: [[[0.12, 0.35], [0.35, 1.05], [0.72, 1]], [[1.05, 0.95], [1.05, 0.25], [0.86, 0]]],
+    spade: [[[0.02, 0.6], [0.12, 1], [0.3, 1]], [[0.5, 1], [0.8, 0.45], [1, 0]]],
+    fan: [[[0.45, 0.08], [0.85, 0.45], [1, 1]], [[1, 1], [0.82, 0], [0.82, 0]]],
+    lozenge: [[[0, 0], [0.5, 1], [0.5, 1]], [[0.5, 1], [1, 0], [1, 0]]],
+  };
+  function petalPath(name, map) {
+    const sg = SHAPES[name];
+    const pt = ([u, v]) => map(u, v).map(n => +n.toFixed(3)).join(' ');
+    const ends = [[0, 0], ...sg.map(s => s[2])];
+    let d = `M${pt([0, 0])}`;
+    sg.forEach(s => (d += `C${pt(s[0])} ${pt(s[1])} ${pt(s[2])}`));
+    for (let k = sg.length - 1; k >= 0; k--) {
+      const [c1, c2] = sg[k], e = ends[k];
+      d += `C${pt([c2[0], -c2[1]])} ${pt([c1[0], -c1[1]])} ${pt([e[0], -e[1]])}`;
+    }
+    return d + 'Z';
+  }
+  const placeMap = (ax, ay, th, a, L, w) => (u, v) => {
+    const r = a + u * L, c = Math.cos(th), s = Math.sin(th);
+    return [ax + r * c - v * w * s, ay + r * s + v * w * c];
+  };
+
+  // ===== Real data from the generator =====
+  const GB = window.GachBong;
+  const D = GB.design(SEED);
+  function hashInfo(str) {
+    let h = 1779033703 ^ str.length;
+    const states = [h >>> 0];
+    for (let i = 0; i < str.length; i++) {
+      h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+      h = (h << 13) | (h >>> 19);
+      states.push(h >>> 0);
+    }
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    const out = (h ^= h >>> 16) >>> 0;
+    states.push(out);
+    return { states, out };
+  }
+  function stream(seed, n) {
+    let a = seed;
+    const r = [];
+    for (let i = 0; i < n; i++) {
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      r.push(((t ^ (t >>> 14)) >>> 0) / 4294967296);
+    }
+    return r;
+  }
+  const HASH = hashInfo(SEED);
+  const U = stream(HASH.out, 7);
+  const PAL = GB.PALETTES;
+  const PAL_IDX = Math.floor(U[1] * 12);
+  if (PAL[PAL_IDX].name !== D.palette) console.error('stream mismatch', PAL[PAL_IDX].name, D.palette);
+  const ALT = SEED.slice(0, -1) + String.fromCharCode(SEED.charCodeAt(SEED.length - 1) + 1);
+  const ALT_OUT = hashInfo(ALT).out;
+  const popcount = x => { let c = 0; for (; x; x >>>= 1) c += x & 1; return c; };
+  const FLIPS = popcount((HASH.out ^ ALT_OUT) >>> 0);
+
+  // Inline a render() result as a nested <svg> so every frame is synchronous.
+  function inline(svg, pre, x, y, w, h) {
+    const head = svg.match(/^<svg[^>]*>/)[0];
+    const nh = head.replace(/ width="[^"]*"/, ` x="${n2(x)}" y="${n2(y)}" width="${n2(w)}"`).replace(/ height="[^"]*"/, ` height="${n2(h)}"`);
+    return (nh + svg.slice(head.length))
+      .replace(/id="/g, `id="${pre}`)
+      .replace(/href="#/g, `href="#${pre}`)
+      .replace(/url\(#/g, `url(#${pre}`);
+  }
+  const TILE_WORN = GB.render(D, { tiles: D.quad ? 2 : 1, worn: true });
+  const FLOOR_PLAIN = GB.render(D, { tiles: 6, worn: false });
+  const FLOOR_WORN = GB.render(D, { tiles: 6, worn: true });
+  const MORE = MORE_WORDS.map(w => GB.render(GB.design(w), { tiles: 6, worn: true }));
+
+  // ===== Frame furniture =====
+  const hdr = (step, title, lt) => {
+    const a = eo(seg(lt, 0.05, 0.5));
+    return T(CX, 300 + (1 - a) * 14, `${step} / 7`, { fam: 'd', size: 40, weight: 600, fill: C.ochre, ls: 6, op: a }) +
+      T(CX, 392 + (1 - a) * 14, title, { fam: 'd', size: 88, weight: 700, op: a, ls: 1 });
+  };
+  function lines(lt, list, y0, o = {}) {
+    const { size = 44, step = 58, fam = 'b', fill = C.ink } = o;
+    let out = '';
+    list.forEach(([t0, ls], i) => {
+      const t1 = i + 1 < list.length ? list[i + 1][0] : 1e9;
+      const a = seg(lt, t0, t0 + 0.4) * (1 - seg(lt, t1, t1 + 0.3));
+      if (a <= 0) return;
+      ls.forEach((s, j) => (out += T(CX, y0 + j * step + (1 - eo(seg(lt, t0, t0 + 0.4))) * 14, s, { size, fam, fill, op: a })));
+    });
+    return out;
+  }
+  const caps = (lt, list) => lines(lt, list, 1345);
+
+  // ===== Scenes =====
+  const SCENES = [];
+  const scene = (step, title, dur, draw) => SCENES.push({ step, title, dur, draw });
+
+  // ----- Hook -----
+  scene(0, '', 4.2, lt => {
+    const a = eo(seg(lt, 0, 0.7));
+    let o = T(CX, 560, 'GẠCH BÔNG', { fam: 'd', size: 230, weight: 700, fill: C.cream, op: a, ls: 4 });
+    o += T(CX, 705, 'Cement tiles from one word', { size: 48, fill: C.dim, op: a });
+    const shown = Math.floor(seg(lt, 0.9, 2.0) * SEED.length + 1e-6);
+    o += Rc(250, 790, 580, 110, { rx: 18, fill: '#242119', stroke: C.faint, strokeWidth: 3, opacity: a });
+    o += T(290, 865, SEED.slice(0, shown), { size: 58, anchor: 'start', fill: C.ink, op: a });
+    if (lt < 2.3 && Math.floor(lt * 2.4) % 2 === 0) {
+      o += Rc(292 + shown * 33, 825, 4, 56, { fill: C.ochre });
+    }
+    const p = eo(seg(lt, 2.2, 3.0));
+    const size = 500 * (0.7 + 0.3 * p);
+    o += G({ opacity: p }, inline(TILE_WORN, 'ht', CX - size / 2, 1190 - size / 2, size, size));
+    o += T(CX, 1500, 'How does code draw this?', { size: 50, weight: 600, op: eo(seg(lt, 3.0, 3.6)) });
+    return o;
+  });
+
+  // ----- 1. Word to numbers -----
+  function bitGrid(cx, cy, cell, a, b, p) {
+    let o = '';
+    const gap = cell * 0.14;
+    for (let i = 0; i < 32; i++) {
+      const col = i % 8, row = (i / 8) | 0;
+      const x = cx + (col - 3.5) * cell, y = cy + (row - 1.5) * cell;
+      const ba = (a >>> (31 - i)) & 1, bb = (b >>> (31 - i)) & 1;
+      const q = ez(cl(p * 1.7 - (i / 32) * 0.7));
+      o += Rc(x - (cell - gap) / 2, y - (cell - gap) / 2, cell - gap, cell - gap, { rx: cell * 0.2, fill: mix(C.faint, C.ochre, ba + (bb - ba) * q) });
+    }
+    return o;
+  }
+  const hex8 = x => '0x' + x.toString(16).toUpperCase().padStart(8, '0');
+  scene(1, 'WORD → NUMBERS', 13.4, lt => {
+    let o = hdr(1, 'WORD → NUMBERS', lt);
+    const len = SEED.length;
+    const stepT = Math.min(0.8, 2.4 / len);
+    const sp = Math.min(150, 840 / len);
+
+    // a: letters stir a 32-bit number
+    const A = win(lt, 0.2, 4.4);
+    if (A > 0) {
+      let g = '';
+      for (let i = 0; i < len; i++) {
+        const x = CX + (i - (len - 1) / 2) * sp;
+        const a = eo(seg(lt, 0.3 + i * 0.18, 0.7 + i * 0.18));
+        const t0 = 1.0 + i * stepT;
+        const hot = seg(lt, t0 - 0.1, t0) * (1 - seg(lt, t0 + 0.4, t0 + 0.7));
+        g += T(x, 590 + (1 - a) * -30, SEED[i], { fam: 'd', size: 130, weight: 700, fill: mix(C.cream, C.ochre, hot), op: a });
+        g += T(x, 660, String(SEED.charCodeAt(i)), { size: 36, fill: C.dim, op: a });
+        g += Ln(x, 690, x, 740, { stroke: C.faint, strokeWidth: 3, opacity: a });
+      }
+      let prev = HASH.states[0], cur = HASH.states[0], p = 0;
+      for (let i = 1; i <= len + 1; i++) {
+        const t0 = i <= len ? 1.0 + (i - 1) * stepT : 1.0 + len * stepT + 0.15;
+        const q = seg(lt, t0, t0 + 0.55);
+        if (q > 0) { prev = HASH.states[i - 1]; cur = HASH.states[i]; p = q; }
+      }
+      g += bitGrid(CX, 930, 74, prev, cur, p);
+      g += T(CX, 1120, hex8(p > 0 ? (p >= 1 ? cur : prev) : HASH.states[0]), { size: 40, fill: C.dim, op: 1 });
+      o += G({ opacity: A }, g);
+    }
+
+    // b: stream of numbers
+    const B = win(lt, 4.4, 7.7);
+    if (B > 0) {
+      let g = T(CX, 530, 'a stream of numbers', { size: 38, fill: C.dim });
+      for (let i = 0; i < 7; i++) {
+        const a = eo(seg(lt, 4.8 + i * 0.28, 5.2 + i * 0.28));
+        const y = 610 + i * 82;
+        const hot = i < 2;
+        g += T(160, y + 14, 'u' + '₁₂₃₄₅₆₇'[i], { fam: 'm', size: 44, fill: hot ? C.ochre : C.dim, anchor: 'end', op: a });
+        g += Rc(200, y - 12, 620, 26, { rx: 13, fill: C.faint, opacity: a });
+        g += Rc(200, y - 12, Math.max(26, 620 * U[i] * a), 26, { rx: 13, fill: hot ? C.ochre : C.dim, opacity: a });
+        g += T(850, y + 14, U[i].toFixed(4), { size: 38, fill: hot ? C.cream : C.dim, anchor: 'start', op: a });
+      }
+      o += G({ opacity: B }, g);
+    }
+
+    // c: u1 and u2 make choices
+    const Cc = win(lt, 7.7, 10.6);
+    if (Cc > 0) {
+      let g = '';
+      const bx = 140, bw = 800, by = 560;
+      g += Rc(bx, by - 14, bw, 28, { rx: 14, fill: C.faint });
+      g += Rc(bx, by - 14, bw * 0.3, 28, { rx: 14, fill: C.terra });
+      g += T(bx + bw * 0.15, by - 34, 'four tiles', { size: 30, fill: C.terra });
+      g += T(bx + bw * 0.65, by - 34, 'one tile', { size: 30, fill: C.dim });
+      const k = eo(seg(lt, 8.0, 8.8));
+      g += Ci(bx + bw * U[0] * k, by, 24, { fill: C.ochre, stroke: C.bg, strokeWidth: 5 });
+      g += T(bx + bw * U[0] * k, by + 66, 'u₁ = ' + U[0].toFixed(2), { fam: 'm', size: 38, fill: C.ochre });
+      const sel = eo(seg(lt, 9.0, 9.6));
+      PAL.forEach((p, i) => {
+        const col = i % 4, row = (i / 4) | 0;
+        const x = 160 + col * 220, y = 720 + row * 130;
+        const on = i === PAL_IDX;
+        const dim = on ? 1 : lerp(1, 0.28, sel);
+        g += Rc(x - 6, y - 6, 212, 112, { rx: 14, fill: 'none', stroke: C.cream, strokeWidth: 4, opacity: on ? sel : 0 });
+        const cols = [p.bg, ...p.inks];
+        const wBg = 80, wI = (200 - wBg) / p.inks.length;
+        g += `<g opacity="${n2(dim)}"><clipPath id="pc${i}"><rect x="${x}" y="${y}" width="200" height="100" rx="10"/></clipPath><g clip-path="url(#pc${i})">` +
+          Rc(x, y, wBg, 100, { fill: cols[0] }) + p.inks.map((c, j) => Rc(x + wBg + j * wI, y, wI + 1, 100, { fill: c })).join('') + '</g></g>';
+      });
+      g += T(CX, 1170, `u₂ × 12 = ${(U[1] * 12).toFixed(2)}  →  ${D.palette}`, { fam: 'm', size: 40, fill: C.ochre, op: sel });
+      o += G({ opacity: Cc }, g);
+    }
+
+    // d: avalanche
+    const Dd = win(lt, 10.6, 13.4);
+    if (Dd > 0) {
+      const f = eo(seg(lt, 10.9, 11.7)), s = ez(seg(lt, 11.6, 12.4));
+      let g = '';
+      [[-250, SEED, HASH.out, HASH.out], [250, ALT, ALT_OUT, HASH.out]].forEach(([dx, w, v, ref]) => {
+        g += T(CX + dx, 640, w, { fam: 'd', size: 96, weight: 700, fill: C.cream });
+        const cell = 46, cx = CX + dx, cy = 820;
+        for (let i = 0; i < 32; i++) {
+          const col = i % 8, row = (i / 8) | 0;
+          const x = cx + (col - 3.5) * cell, y = cy + (row - 1.5) * cell;
+          const bit = (v >>> (31 - i)) & 1, diff = ((v ^ ref) >>> (31 - i)) & 1;
+          const colr = dx > 0 && diff ? mix(bit ? C.ochre : C.faint, C.terra, s) : bit ? C.ochre : C.faint;
+          g += Rc(x - 19, y - 19, 38, 38, { rx: 8, fill: colr });
+        }
+      });
+      g = G({ opacity: f }, g);
+      g += T(CX, 1060, `${FLIPS} of 32 bits flip`, { size: 54, weight: 600, fill: C.terra, op: s });
+      o += G({ opacity: Dd }, g);
+    }
+
+    o += caps(lt, [
+      [0.3, ['Each letter stirs a hidden', '32-bit number.']],
+      [3.6, ['Then the number is mixed once more.']],
+      [4.8, ['A small formula turns it into', 'a stream of numbers from 0 to 1.', 'The same word gives the same stream.']],
+      [7.9, ['u₁ picks one tile or four.', 'u₂ picks one of 12 color sets.']],
+      [10.8, [`Change one letter: ${FLIPS} of 32 bits flip.`, 'A new word is a new tile.']],
+    ]);
+    return o;
+  });
+
+  // ----- 2. One cell, 8 copies -----
+  const PET = { ax: 0.42, ay: 0.15, th: 16 * RAD, L: 0.6034, w: 0.1 };
+  const CELL_PETAL = petalPath('almond', placeMap(PET.ax, PET.ay, PET.th, 0, PET.L, PET.w));
+  const STEPS = [
+    { label: 'mirror', at: 8.6, ops: [[0, 1]], count: 2 },
+    { label: 'turn 90°', at: 9.6, ops: [[1, 0], [1, 1]], count: 4 },
+    { label: 'turn 180°', at: 10.6, ops: [[2, 0], [2, 1]], count: 6 },
+    { label: 'turn 270°', at: 11.6, ops: [[3, 0], [3, 1]], count: 8 },
+  ];
+  const mirrorT = p => `matrix(${n2(1 - p)} ${n2(p)} ${n2(p)} ${n2(1 - p)} 0 0)`;
+  const opFinal = (k, r) => `rotate(${k * 90}) matrix(${r ? '0 1 1 0' : '1 0 0 1'} 0 0)`;
+  const EIGHT = [0, 1, 2, 3].flatMap(k => [0, 1].map(r => P(CELL_PETAL, { transform: opFinal(k, r) }))).join('');
+
+  scene(2, 'ONE CELL, 8 COPIES', 16.4, lt => {
+    let o = hdr(2, 'ONE CELL, 8 COPIES', lt);
+    const zoom = ez(seg(lt, 12.5, 14.8));
+    const u = lerp(345, 135, zoom);
+    let g = '';
+
+    // neighbors
+    const nb = seg(lt, 12.7, 14.2), nb2 = seg(lt, 13.6, 14.8);
+    if (nb > 0) {
+      for (let cy = -4; cy <= 4; cy += 2) for (let cx = -4; cx <= 4; cx += 2) {
+        if (!cx && !cy) continue;
+        const ring = Math.max(Math.abs(cx), Math.abs(cy)) === 2 ? nb : nb2;
+        g += G({ transform: `translate(${cx * u} ${cy * u}) scale(${u})`, opacity: ring }, G({ fill: C.ochre }, EIGHT));
+      }
+    }
+
+    // base cell: fill squares and outline
+    g = Rc(-u, -u, 2 * u, 2 * u, { fill: '#221f1a' }) + g;
+
+    // mirrors
+    const mirrors = [[1, 0], [0, 1], [1, 1], [1, -1]];
+    const mAlpha = lt < 12.5 ? 1 : 1 - seg(lt, 12.5, 13.2);
+    mirrors.forEach(([dx, dy], i) => {
+      const p = ez(seg(lt, 1.6 + i * 0.55, 2.3 + i * 0.55));
+      const len = Math.hypot(dx, dy), L = 1.2 * u * p * (dx && dy ? 1.18 : 1);
+      g += Ln(-dx / len * L, -dy / len * L, dx / len * L, dy / len * L, { stroke: C.ochre, strokeWidth: 4, strokeDasharray: '16 12', opacity: mAlpha * 0.9 });
+    });
+
+    // triangle
+    const tri = win(lt, 7.0, 12.5, 0.4) * (1 - seg(lt, 12.2, 12.7));
+    if (tri > 0) {
+      g += P(`M0 0L${u} 0L${u} ${u}Z`, { fill: C.ochre, fillOpacity: 0.18 * tri, stroke: C.ochre, strokeWidth: 4, strokeOpacity: 0.7 * tri });
+      g += T(u * 0.78, u * 0.28, '1/8', { fam: 'd', size: 56, weight: 700, fill: C.ochre, op: tri * (1 - seg(lt, 8.1, 8.5)) });
+    }
+
+    // petal and copies
+    const first = eo(seg(lt, 7.6, 8.4));
+    let pets = '';
+    if (first > 0) {
+      pets += P(CELL_PETAL, { opacity: first });
+      STEPS.forEach(s => {
+        const p = ez(seg(lt, s.at, s.at + 0.8));
+        if (p <= 0) return;
+        s.ops.forEach(([k, r]) => {
+          const base = s.label === 'mirror' ? mirrorT(p) : `rotate(${k * 90 * p}) matrix(${r ? '0 1 1 0' : '1 0 0 1'} 0 0)`;
+          pets += P(CELL_PETAL, { transform: base, opacity: Math.min(1, p * 3) });
+        });
+      });
+    }
+    g += G({ transform: `scale(${u})`, fill: C.ochre }, pets);
+
+    // outline
+    const ow = 1 - seg(lt, 13.8, 14.6) * 0.5;
+    g += Rc(-u, -u, 2 * u, 2 * u, { fill: 'none', stroke: C.cream, strokeWidth: 5, opacity: ow });
+
+    // centers
+    const cen = win(lt, 4.3, 12.5, 0.4) * (lt < 7.0 ? 1 : lerp(1, 0.5, seg(lt, 7.0, 7.6))) * (1 - seg(lt, 12.2, 12.8));
+    if (cen > 0) {
+      const sq = ez(seg(lt, 5.3, 6.3)) * 90, ln = ez(seg(lt, 6.0, 7.0)) * 180;
+      const pop = eo(seg(lt, 4.3, 5.0));
+      [[0, 0], [-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([x, y]) => {
+        g += G({ transform: `translate(${x * u} ${y * u}) rotate(${sq})`, opacity: cen * pop }, Rc(-17, -17, 34, 34, { fill: C.terra, stroke: C.bg, strokeWidth: 4 }));
+      });
+      [[0, -1, 0], [0, 1, 0], [-1, 0, 90], [1, 0, 90]].forEach(([x, y, r]) => {
+        g += G({ transform: `translate(${x * u} ${y * u}) rotate(${r + ln})`, opacity: cen * pop }, `<ellipse rx="26" ry="12" fill="${C.jade}" stroke="${C.bg}" stroke-width="4"/>`);
+      });
+    }
+    o += G({ transform: `translate(${CX} ${CY})` }, G({ clipPath: 'url(#stageClip)' }, g) + Rc(-440, -400, 880, 800, { rx: 22, fill: 'none', stroke: C.faint, strokeWidth: 3, opacity: seg(lt, 12.6, 13.2) }));
+
+    // legend and tag
+    if (cen > 0) {
+      let lg = Rc(-250 - 17, -388 - 17, 34, 34, { fill: C.terra }) + T(-215, -375, 'turns by 90°', { size: 34, anchor: 'start', fill: C.ink });
+      lg += `<ellipse cx="60" cy="-388" rx="26" ry="12" fill="${C.jade}"/>` + T(100, -375, 'turns by 180°', { size: 34, anchor: 'start', fill: C.ink });
+      o += G({ transform: `translate(${CX} ${CY})`, opacity: cen * (lt < 7.0 ? 1 : 0.0) }, lg);
+    }
+    STEPS.forEach((s, i) => {
+      const nextAt = i + 1 < STEPS.length ? STEPS[i + 1].at : 12.4;
+      const a = seg(lt, s.at, s.at + 0.3) * (1 - seg(lt, nextAt, nextAt + 0.2));
+      if (a > 0) o += T(CX, CY - 380, `${s.label}: ${s.count} copies`, { fam: 'd', size: 54, weight: 700, fill: C.ochre, op: a });
+    });
+
+    o += caps(lt, [
+      [0.2, ['The pattern lives in', 'one square cell.']],
+      [1.6, ['The cell has 4 mirror lines.']],
+      [4.3, ['The middle and the corners turn by 90°.', 'The edge middles turn by 180°.']],
+      [7.2, ['Draw one shape in 1/8 of the cell.', 'Mirrors and turns copy it 8 times.']],
+      [12.4, ['Copy the cell to the sides.', 'The edges join. No seams.']],
+    ]);
+    return o;
+  });
+
+  // ----- 3. The petal -----
+  const PMAP = (u, v) => [-350 + 700 * u, 90 - 270 * v];
+  const P0 = PMAP(0, 0), P1 = PMAP(0.3, 1.33), P2 = PMAP(0.7, 1.33), P3 = PMAP(1, 0);
+  const lp = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t)];
+  const GAL = ['almond', 'teardrop', 'spoon', 'heart', 'spade', 'fan', 'lozenge'];
+  const PLACE_FORMULA = 'P = anchor + (a + u·L)(cos θ, sin θ) + v·w(−sin θ, cos θ)';
+
+  scene(3, 'THE PETAL', 20.2, lt => {
+    let o = hdr(3, 'THE PETAL', lt);
+    let g = '';
+
+    // a + b: points and de Casteljau
+    const t = lt < 3.0 ? 0 : seg(lt, 3.0, 9.0);
+    if (lt < 12.2) {
+      const pa = seg(lt, 0.2, 1.6);
+      const Q0 = lp(P0, P1, t), Q1 = lp(P1, P2, t), Q2 = lp(P2, P3, t);
+      const R0 = lp(Q0, Q1, t), R1 = lp(Q1, Q2, t), B = lp(R0, R1, t);
+      let h = '';
+      h += P(`M${P0}L${P1}L${P2}L${P3}`, { fill: 'none', stroke: C.dim, strokeWidth: 3, strokeDasharray: '10 10', opacity: pa });
+      if (t > 0) {
+        h += P(`M${Q0}L${Q1}L${Q2}`, { fill: 'none', stroke: C.terra, strokeWidth: 4 });
+        h += P(`M${R0}L${R1}`, { fill: 'none', stroke: C.jade, strokeWidth: 5 });
+        h += P(`M${P0}C${Q0} ${R0} ${B}`, { fill: 'none', stroke: C.ochre, strokeWidth: 9, strokeLinecap: 'round' });
+        [Q0, Q1, Q2].forEach(q => (h += Ci(q[0], q[1], 11, { fill: C.terra })));
+        [R0, R1].forEach(q => (h += Ci(q[0], q[1], 11, { fill: C.jade })));
+        h += Ci(B[0], B[1], 17, { fill: C.cream, stroke: C.ochre, strokeWidth: 6 });
+      }
+      [[P0, 'P₀', -34, 44], [P1, 'P₁', -34, -22], [P2, 'P₂', 34, -22], [P3, 'P₃', 34, 44]].forEach(([p, s, dx, dy], i) => {
+        const a = eo(seg(lt, 0.3 + i * 0.35, 0.7 + i * 0.35));
+        h += Ci(p[0], p[1], 15, { fill: C.cream, opacity: a });
+        h += T(p[0] + dx, p[1] + dy, s, { fam: 'm', size: 46, fill: C.cream, op: a });
+      });
+      if (lt >= 1.9 && lt < 3.2) {
+        const a = seg(lt, 1.9, 2.4) * (1 - seg(lt, 2.9, 3.2));
+        h += T(P1[0] + 160, P1[1] - 6, '(0.3, 1.33)', { fam: 'm', size: 34, fill: C.dim, op: a });
+        h += T(P2[0] - 160, P2[1] - 6, '(0.7, 1.33)', { fam: 'm', size: 34, fill: C.dim, op: a });
+      }
+      // t bar
+      const tb = seg(lt, 2.8, 3.3) * (1 - seg(lt, 9.0, 9.5));
+      if (tb > 0) {
+        h += G({ opacity: tb }, Ln(-330, 330, 250, 330, { stroke: C.faint, strokeWidth: 8, strokeLinecap: 'round' }) +
+          Ln(-330, 330, -330 + 580 * t, 330, { stroke: C.ochre, strokeWidth: 8, strokeLinecap: 'round' }) +
+          Ci(-330 + 580 * t, 330, 16, { fill: C.cream }) + T(-360, 344, 't', { fam: 'm', size: 42, fill: C.dim, anchor: 'end' }) +
+          T(285, 344, '= ' + t.toFixed(2), { fam: 'm', size: 42, fill: C.cream, anchor: 'start' }));
+      }
+      const fm = seg(lt, 3.3, 3.9) * (1 - seg(lt, 9.0, 9.5));
+      if (fm > 0) {
+        h += T(0, -366, 'B(t) = (1−t)³P₀ + 3(1−t)²t·P₁ + 3(1−t)t²·P₂ + t³P₃', { fam: 'm', size: 30, fill: C.cream, op: fm });
+      }
+      // mirror (9.4 - 12.2)
+      const mp = ez(seg(lt, 9.5, 11.0));
+      const flip = lt >= 9.5;
+      if (flip) {
+        const s = Math.cos(Math.PI * mp);
+        const up = `M${P0}C${P1} ${P2} ${P3}`;
+        const low = `M${P0}C${PMAP(0.3, 1.33 * s)} ${PMAP(0.7, 1.33 * s)} ${P3}`;
+        const fillA = seg(lt, 10.9, 11.6);
+        h = P(up, { fill: 'none', stroke: C.ochre, strokeWidth: 9, strokeLinecap: 'round' }) +
+          P(low, { fill: 'none', stroke: C.ochre, strokeWidth: 9, strokeLinecap: 'round' }) +
+          P(petalPath('almond', PMAP), { fill: C.jade, fillOpacity: fillA * 0.9, stroke: C.cream, strokeWidth: 6, strokeOpacity: fillA }) +
+          Ln(-380, 90, 380, 90, { stroke: C.dim, strokeWidth: 3, strokeDasharray: '10 10' }) +
+          [P0, P3].map(p => Ci(p[0], p[1], 15, { fill: C.cream })).join('') +
+          T(380, 140, 'v → −v', { fam: 'm', size: 40, fill: C.dim, anchor: 'end', op: 1 - fillA });
+        h = G({ opacity: 1 - seg(lt, 11.9, 12.4) }, h);
+      }
+      g += h;
+    }
+
+    // c: gallery
+    const gl = win(lt, 12.2, 15.2, 0.4);
+    if (gl > 0) {
+      let h = '';
+      GAL.forEach((name, i) => {
+        const row = i < 4 ? 0 : 1, col = row ? i - 4 : i;
+        const n = row ? 3 : 4;
+        const cx = (col - (n - 1) / 2) * 210, cy = -150 + row * 300;
+        const a = eo(seg(lt, 12.4 + i * 0.18, 12.9 + i * 0.18));
+        const sc = 0.85 + 0.15 * a;
+        const map = (u, v) => [cx - 85 + 170 * u * sc, cy - 72 * v * sc];
+        h += P(petalPath(name, map), { fill: [C.ochre, C.terra, C.jade, C.cream][i % 4], opacity: a });
+        h += T(cx, cy + 118, name, { size: 32, fill: C.dim, op: a });
+      });
+      g += G({ opacity: gl }, h);
+    }
+
+    // d: placement
+    const pl = win(lt, 15.0, 20.2, 0.4) * (1 - 0);
+    if (pl > 0) {
+      const L0 = 300, W0 = 300, L1 = 560, W1 = 95;
+      const s1 = ez(seg(lt, 16.1, 17.2)), s2 = ez(seg(lt, 17.5, 18.5)), s3 = ez(seg(lt, 18.7, 19.7));
+      const Lx = lerp(L0, L1, s1), Wy = lerp(W0, W1, s1);
+      const th = lerp(0, -38 * RAD, s2);
+      const b0 = [-300, 40], b1 = [-170, 150];
+      const base = [lerp(b0[0], b1[0], s3), lerp(b0[1], b1[1], s3)];
+      const map = (u, v) => {
+        const x = u * Lx, y = -v * Wy, c = Math.cos(th), s = Math.sin(th);
+        return [base[0] + x * c - y * s, base[1] + x * s + y * c];
+      };
+      let h = '';
+      h += Ln(-380, base[1], 380, base[1], { stroke: C.faint, strokeWidth: 3, opacity: 1 - s2 });
+      h += P(petalPath('almond', map), { fill: C.jade, fillOpacity: 0.9, stroke: C.cream, strokeWidth: 5 });
+      h += Ci(base[0], base[1], 13, { fill: C.cream });
+      const anch = seg(lt, 18.6, 19.0);
+      h += G({ opacity: anch }, Ln(b1[0] - 30, b1[1], b1[0] + 30, b1[1], { stroke: C.terra, strokeWidth: 5 }) + Ln(b1[0], b1[1] - 30, b1[0], b1[1] + 30, { stroke: C.terra, strokeWidth: 5 }) + T(b1[0] - 46, b1[1] + 52, 'anchor', { size: 34, fill: C.terra, anchor: 'end' }));
+      const lab = [['×L along, ×w across', 16.1, 17.4], ['turn by θ', 17.5, 18.7], ['move to the anchor', 18.7, 20.2]];
+      lab.forEach(([s, a, b], i) => {
+        h += T(0, -320, s, { fam: 'd', size: 60, weight: 700, fill: C.ochre, op: win(lt, a, b, 0.25) });
+      });
+      h += T(0, -320, 'unit petal: u, v from 0 to 1', { fam: 'd', size: 60, weight: 700, fill: C.dim, op: win(lt, 15.2, 16.1, 0.25) });
+      g += G({ opacity: pl }, h);
+    }
+    o += stageG(G({ clipPath: 'url(#stageClip)' }, g));
+    const fx = seg(lt, 16.0, 16.6);
+    o += T(CX, 1540, PLACE_FORMULA, { fam: 'm', size: 34, fill: C.ochre, op: fx * pl });
+
+    o += caps(lt, [
+      [0.2, ['A petal starts as 4 points.']],
+      [3.0, ['Slide t from 0 to 1. Mark the', 'point at t on each line. Join the', 'marks. Repeat. One point is left.']],
+      [9.5, ['Mirror the curve across the axis.', 'Fill it. This is one petal.']],
+      [12.3, ['Seven curves make seven kinds', 'of petal.']],
+      [15.2, ['Stretch it by L and w.', 'Turn it by θ. Move it to the anchor.']],
+    ]);
+    return o;
+  });
+
+  // ----- 4. A ring of petals -----
+  const ring = (cx, cy, n, phi, a, len, wf, o) =>
+    Array.from({ length: n }, (_, k) => {
+      const th = phi + (TAU * k) / n;
+      const w = ((Math.PI * (a + len / 2)) / n) * wf;
+      return P(petalPath('almond', placeMap(cx, cy, th, a, len, w)), o);
+    }).join('');
+  scene(4, 'A RING OF PETALS', 13.4, lt => {
+    let o = hdr(4, 'A RING OF PETALS', lt);
+    let g = '';
+
+    // a: counts
+    const A = win(lt, 0.2, 4.4, 0.3);
+    if (A > 0) {
+      let h = '';
+      [4, 8, 12, 16].forEach((n, i) => {
+        const a0 = 0.6 + i * 0.95;
+        const a = win(lt, a0, a0 + 0.95, 0.15);
+        if (a <= 0 && !(i === 0 && lt < a0)) return;
+        const ap = a;
+        h += G({ opacity: ap }, ring(0, 0, n, 0, 55, 255, 0.82, { fill: C.jade, stroke: C.cream, strokeWidth: 3, fillOpacity: 0.92 }) +
+          Ci(0, 0, 44, { fill: C.ochre }) +
+          P(`M335 0A335 335 0 0 1 ${335 * Math.cos(TAU / n)} ${335 * Math.sin(TAU / n)}`, { fill: 'none', stroke: C.ochre, strokeWidth: 7, strokeLinecap: 'round' }) +
+          Ln(300, 0, 370, 0, { stroke: C.ochre, strokeWidth: 4 }) + Ln(300 * Math.cos(TAU / n), 300 * Math.sin(TAU / n), 370 * Math.cos(TAU / n), 370 * Math.sin(TAU / n), { stroke: C.ochre, strokeWidth: 4 }) +
+          T(0, 380, `n = ${n}     360° / n = ${360 / n}°`, { fam: 'm', size: 44, fill: C.ochre, op: 1 }));
+      });
+      g += G({ opacity: A }, h);
+    }
+
+    // b: turn test
+    const B = win(lt, 4.4, 8.4, 0.35);
+    if (B > 0) {
+      let h = '';
+      const turn = ez(seg(lt, 5.1, 6.9)) * 90;
+      const verdict = seg(lt, 6.9, 7.4);
+      [[-240, 6, false], [240, 8, true]].forEach(([dx, n, ok]) => {
+        h += ring(dx, 0, n, 0, 36, 150, 0.82, { fill: C.jade, fillOpacity: 0.85 });
+        h += Ci(dx, 0, 28, { fill: C.ochre });
+        const col = verdict > 0 ? (ok ? C.cream : C.terra) : C.cream;
+        h += G({ transform: `rotate(${turn} ${dx} 0)` }, ring(dx, 0, n, 0, 36, 150, 0.82, { fill: 'none', stroke: col, strokeWidth: 5, strokeDasharray: '12 8' }));
+        h += T(dx, 330, `n = ${n}`, { fam: 'm', size: 50, fill: C.cream });
+        h += T(dx, 400, ok ? '✓' : '✗', { size: 72, weight: 600, fill: ok ? C.jade : C.terra, op: verdict });
+      });
+      h += T(0, -320, `turn by 90°`, { fam: 'd', size: 64, weight: 700, fill: C.ochre });
+      g += G({ opacity: B }, h);
+    }
+
+    // c: mirror test
+    const Cc = win(lt, 8.4, 11.4, 0.35);
+    if (Cc > 0) {
+      let h = '';
+      const flip = ez(seg(lt, 9.0, 10.2));
+      const verdict = seg(lt, 10.2, 10.7);
+      [[-300, 0, 'φ = 0', true], [0, Math.PI / 8, 'φ = 180°/n', true], [300, 10 * RAD, 'φ = 10°', false]].forEach(([dx, phi, label, ok]) => {
+        h += ring(dx, 0, 8, phi, 24, 100, 0.82, { fill: C.jade, fillOpacity: 0.85 });
+        h += Ln(dx - 150, 0, dx + 150, 0, { stroke: C.dim, strokeWidth: 3, strokeDasharray: '8 8' });
+        const col = verdict > 0 ? (ok ? C.cream : C.terra) : C.cream;
+        h += G({ transform: `translate(0 0) scale(1 ${n2(Math.cos(Math.PI * flip))})` }, ring(dx, 0, 8, phi, 24, 100, 0.82, { fill: 'none', stroke: col, strokeWidth: 4, strokeDasharray: '10 7' }));
+        h += T(dx, 240, label, { fam: 'm', size: 40, fill: C.cream });
+        h += T(dx, 320, ok ? '✓' : '✗', { size: 66, weight: 600, fill: ok ? C.jade : C.terra, op: verdict });
+      });
+      h += T(0, -260, 'flip across a mirror', { fam: 'd', size: 64, weight: 700, fill: C.ochre });
+      g += G({ opacity: Cc }, h);
+    }
+
+    // d: width
+    const Dd = win(lt, 11.4, 13.4, 0.35);
+    if (Dd > 0) {
+      const wf = lt < 12.3 ? lerp(0.55, 0.95, ez(seg(lt, 11.7, 12.3))) : lerp(0.95, 0.8, ez(seg(lt, 12.3, 13)));
+      let h = '';
+      const r0 = 55, ln = 255, n = 8;
+      h += P(`M0 0L${(r0 + ln) * Math.cos(-Math.PI / n)} ${(r0 + ln) * Math.sin(-Math.PI / n)}A${r0 + ln} ${r0 + ln} 0 0 1 ${(r0 + ln) * Math.cos(Math.PI / n)} ${(r0 + ln) * Math.sin(Math.PI / n)}Z`, { fill: C.ochre, fillOpacity: 0.16, stroke: C.ochre, strokeWidth: 3, strokeOpacity: 0.6 });
+      h += ring(0, 0, n, 0, r0, ln, wf, { fill: C.jade, fillOpacity: 0.92, stroke: C.cream, strokeWidth: 3 });
+      h += Ci(0, 0, 44, { fill: C.ochre });
+      h += T(0, 400, `width = ${Math.round(wf * 100)}% of the slice`, { fam: 'm', size: 44, fill: C.ochre });
+      g += G({ opacity: Dd }, h);
+    }
+    o += stageG(G({ clipPath: 'url(#stageClip)' }, g));
+    o += caps(lt, [
+      [0.3, ['n petals sit in a ring.', 'Each turns 360°/n from the last.']],
+      [4.5, ['The floor turns by 90°.', 'Petals must land on petals.', 'So n is 4, 8, 12 or 16.']],
+      [8.5, ['A mirror needs the first petal', 'at 0° or at 180°/n.', 'Any other start breaks it.']],
+      [11.5, ['Each petal fills 55–95% of its', 'slice of the circle: 2πr / n.']],
+    ]);
+    return o;
+  });
+
+  // ----- 5. The outline -----
+  scene(5, 'THE OUTLINE', 5.6, lt => {
+    let o = hdr(5, 'THE OUTLINE', lt);
+    let g = '';
+    const A = 1 - seg(lt, 3.0, 3.6);
+    if (A > 0) {
+      const base = [0, 330], L = 640, W = 240, inset = 36;
+      const pa = eo(seg(lt, 0.2, 0.9)), pb = eo(seg(lt, 1.0, 1.8));
+      const m1 = placeMap(base[0], base[1], -Math.PI / 2, 0, L, W);
+      const m2 = placeMap(base[0], base[1], -Math.PI / 2, inset, L - 2 * inset, W - inset);
+      let h = P(petalPath('teardrop', m1), { fill: C.cream, opacity: pa });
+      h += P(petalPath('teardrop', m2), { fill: C.jade, opacity: pb, transform: `translate(0 ${n2((1 - pb) * -10)})` });
+      const dm = seg(lt, 1.9, 2.5), wy = base[1] - 0.62 * L;
+      h += G({ opacity: dm }, Ln(-W - 2, wy, -W + inset + 2, wy, { stroke: C.terra, strokeWidth: 6 }) + Ln(-W - 2, wy - 22, -W - 2, wy + 22, { stroke: C.terra, strokeWidth: 6 }) + Ln(-W + inset + 2, wy - 22, -W + inset + 2, wy + 22, { stroke: C.terra, strokeWidth: 6 }) + T(-W - 24, wy + 12, 'rim', { size: 40, fill: C.terra, anchor: 'end' }));
+      g += G({ opacity: A }, h);
+    }
+    const B = seg(lt, 3.2, 3.9);
+    if (B > 0) {
+      let h = ring(0, 0, 8, 0, 70, 290, 0.95, { fill: C.cream });
+      h += ring(0, 0, 8, 0, 70 + 22, 290 - 44, 0.95 - 0.1, { fill: C.jade });
+      h += Ci(0, 0, 66, { fill: C.cream }) + Ci(0, 0, 46, { fill: C.ochre });
+      g += G({ opacity: B }, h);
+    }
+    o += stageG(G({ clipPath: 'url(#stageClip)' }, g));
+    o += caps(lt, [
+      [0.2, ['Draw a shape in one color.', 'Draw a smaller copy in another.', 'The thin ring left is the outline.']],
+      [3.4, ['On a 20 cm tile, this ring', 'is only 2–3 mm wide.']],
+    ]);
+    return o;
+  });
+
+  // ----- 6. Stack the layers -----
+  const SQ2 = Math.SQRT2;
+  const layerG = (e, s) =>
+    G({ fill: e.fill },
+      [-2, 0, 2].map(cy => [-2, 0, 2].map(cx =>
+        G({ transform: `translate(${cx} ${cy})` }, [[1, 0, 0, 1], [0, 1, -1, 0], [-1, 0, 0, -1], [0, -1, 1, 0]].slice(0, e.sym).map(m => P(e.d, { transform: `matrix(${m.join(' ')} 0 0)` })).join(''))
+      ).join('')).join(''));
+  scene(6, 'STACK THE LAYERS', 14.0, lt => {
+    let o = hdr(6, 'STACK THE LAYERS', lt);
+    let g = '';
+    const A = win(lt, 0.2, 4.7, 0.35);
+    if (A > 0) {
+      const u = 190;
+      const r1 = lerp(0.55, 0.92, ez(seg(lt, 0.7, 2.6))) - 0.15 * ez(seg(lt, 2.8, 3.8));
+      const r2 = SQ2 - r1;
+      let h = '';
+      h += Ln(-2 * u, 0, 2 * u, 0, { stroke: C.faint, strokeWidth: 4 }) + Ln(0, -2 * u, 0, 2 * u, { stroke: C.faint, strokeWidth: 4 });
+      [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([x, y]) => (h += Ci(x * u, y * u, r1 * u, { fill: C.terra, fillOpacity: 0.85, stroke: C.cream, strokeWidth: 4 })));
+      h += Ci(0, 0, r2 * u, { fill: C.jade, fillOpacity: 0.9, stroke: C.cream, strokeWidth: 4 });
+      const dx = -u, dy = -u, d = Math.hypot(dx, dy);
+      h += Ln(dx, dy, 0, 0, { stroke: C.ochre, strokeWidth: 6, strokeLinecap: 'round' });
+      h += Ci(dx, dy, 10, { fill: C.cream }) + Ci(0, 0, 10, { fill: C.cream });
+      h += T(-u - 38, -u - 28, 'O', { fam: 'm', size: 40, fill: C.cream });
+      h += T(26, 52, 'K', { fam: 'm', size: 40, fill: C.cream });
+      h += T(-u * 0.5 - 60, -u * 0.5 + 12, '√2', { fam: 'm', size: 44, fill: C.ochre });
+      h += T(0, 400, `R₁ + R₂ = ${(r1 + r2).toFixed(2)}`, { fam: 'm', size: 46, fill: C.ochre });
+      h += T(-u * 1.0, -u * 1.0 - 160, 'R₁', { fam: 'm', size: 44, fill: C.terra, op: 0 });
+      g += G({ opacity: A }, h);
+    }
+
+    const N = D.els.length, dt = Math.min(0.5, 8.0 / N), t0 = 5.2;
+    const Bph = seg(lt, 4.7, 5.2);
+    if (Bph > 0) {
+      const u = 360;
+      let h = Rc(-u, -u, 2 * u, 2 * u, { fill: D.bg, opacity: Bph });
+      let cur = -1;
+      for (let i = 0; i < N; i++) {
+        const ti = t0 + i * dt;
+        const a = eo(seg(lt, ti, ti + 0.35));
+        if (a <= 0) break;
+        cur = i;
+        h += G({ transform: `scale(${u * (0.9 + 0.1 * a)})`, opacity: a }, layerG(D.els[i]));
+      }
+      h = `<clipPath id="cellClip"><rect x="${-u}" y="${-u}" width="${2 * u}" height="${2 * u}"/></clipPath>` + G({ clipPath: 'url(#cellClip)' }, h);
+      h += Rc(-u, -u, 2 * u, 2 * u, { fill: 'none', stroke: C.cream, strokeWidth: 5, opacity: Bph });
+      const cw = Math.min(46, 780 / N);
+      let chips = '';
+      for (let i = 0; i < N; i++) {
+        const x = (i - (N - 1) / 2) * (cw + 6);
+        chips += Rc(x - cw / 2, 388, cw, 26, { rx: 6, fill: D.els[i].fill, opacity: i <= cur ? 1 : 0.18, stroke: i === cur ? C.cream : C.dim, strokeWidth: i === cur ? 3 : 1.5 });
+      }
+      h += chips + T(0, -392, `layer ${Math.max(cur + 1, 0)} of ${N}`, { fam: 'm', size: 38, fill: C.dim, op: seg(lt, 5.2, 5.6) });
+      g += G({ opacity: Bph * (1 - A) }, h);
+    }
+    o += stageG(g);
+    o += caps(lt, [
+      [0.3, ['The two medallions share a diagonal.', 'Their radii obey R₁ + R₂ ≤ √2 + 0.05.', 'So they never collide.']],
+      [4.8, ['Now stack the layers, back to front.', 'Each color differs from the one below.']],
+    ]);
+    return o;
+  });
+
+  // ----- 7. Tile the floor -----
+  const FLOOR_PX = 720;
+  const floorAt = (svg, pre, size, fx, alpha) => {
+    const F = size, cx = CX, cy = CY;
+    return G({ opacity: alpha }, inline(svg, pre, cx - fx * F, cy - fx * F, F, F));
+  };
+  scene(7, 'TILE THE FLOOR', 14.4, lt => {
+    let o = hdr(7, 'TILE THE FLOOR', lt);
+    const s = D.quad ? 1 : 2, x0 = -3 * s - (D.quad ? 0 : 1), span = 6 * s;
+    const frac = (0 - x0) / span;
+    const cellFrac = 2 / span;
+    const z = ez(seg(lt, 0.4, 3.4));
+    const F0 = FLOOR_PX / cellFrac, F1 = FLOOR_PX;
+    const F = Math.exp(lerp(Math.log(F0), Math.log(F1), z));
+    const f = lerp(frac, 0.5, z);
+    const sx = CX - f * F, sy = CY - f * F;
+    const wearP = ez(seg(lt, 3.4, 4.4));
+    const word = [seg(lt, 4.8, 5.0), seg(lt, 6.4, 6.6), seg(lt, 8.0, 8.2)];
+    let g = '';
+    const clip = `<clipPath id="floorClip"><rect x="${CX - 440}" y="${CY - 400}" width="880" height="800"/></clipPath>`;
+    const showFirst = 1 - seg(lt, 4.7, 5.1);
+    g += inline(FLOOR_PLAIN, 'fp', sx, sy, F, F).replace('<svg', `<svg opacity="${n2(showFirst * (1 - wearP))}"`);
+    if (wearP > 0) g += inline(FLOOR_WORN, 'fw', sx, sy, F, F).replace('<svg', `<svg opacity="${n2(showFirst * wearP)}"`);
+    MORE.forEach((svg, i) => {
+      const a = i === 0 ? seg(lt, 4.7, 5.1) : seg(lt, 4.7 + i * 1.6, 5.1 + i * 1.6);
+      const out = i < 2 ? 1 - seg(lt, 6.2 + i * 1.6, 6.5 + i * 1.6) : 1 - seg(lt, 9.6, 9.9);
+      if (a * out > 0) g += inline(svg, 'm' + i, CX - FLOOR_PX / 2, CY - FLOOR_PX / 2, FLOOR_PX, FLOOR_PX).replace('<svg', `<svg opacity="${n2(a * out)}"`);
+    });
+    o += clip + G({ clipPath: 'url(#floorClip)' }, g);
+    const showWord = seg(lt, 4.7, 5.1) * (1 - seg(lt, 9.6, 9.9));
+    if (showWord > 0) {
+      const idx = lt < 6.4 ? 0 : lt < 8.0 ? 1 : 2;
+      o += Rc(CX - 250, 1285, 500, 84, { rx: 16, fill: '#242119', stroke: C.faint, strokeWidth: 3, opacity: showWord });
+      o += T(CX, 1343, MORE_WORDS[idx], { size: 48, fill: C.ink, op: showWord });
+    }
+    const endA = eo(seg(lt, 9.9, 10.6));
+    if (endA > 0) {
+      o += Rc(0, 0, 1080, 1920, { fill: C.bg, opacity: endA });
+      o += T(CX, 760, 'GẠCH BÔNG', { fam: 'd', size: 210, weight: 700, fill: C.cream, op: endA, ls: 4 });
+      o += T(CX, 905, 'Type a word. Get a floor.', { size: 52, fill: C.ink, op: endA });
+      o += T(CX, 1070, END_URL, { fam: 'd', size: 110, weight: 700, fill: C.ochre, op: endA });
+      o += T(CX, 1210, 'Inspired by fishdraw by Lingdong Huang', { size: 36, fill: C.dim, op: endA });
+    } else {
+      o += lines(lt, [[0.2, ['Repeat the tile.', '6 × 6 tiles make a 1.2 m floor.']], [3.5, ['Seeded noise adds wear:', 'edges bend by up to 1 mm.']], [4.8, []]], 1345);
+      o += lines(lt, [[4.8, ['Change the word.', 'Get a new floor.']]], 1450);
+    }
+    return o;
+  });
+
+  // ===== Timeline and drawing =====
+  let acc = 0;
+  SCENES.forEach(s => { s.start = acc; acc += s.dur; });
+  const TOTAL = acc;
+  const stage = document.getElementById('stage');
+  const DEFS = `<defs><clipPath id="stageClip"><rect x="-440" y="-400" width="880" height="800"/></clipPath></defs>`;
+
+  function seek(t) {
+    t = cl(t, 0, TOTAL - 0.001);
+    let sc = SCENES[SCENES.length - 1];
+    for (const s of SCENES) if (t < s.start + s.dur) { sc = s; break; }
+    const lt = t - sc.start;
+    const first = sc === SCENES[0], last = sc === SCENES[SCENES.length - 1];
+    const a = (first ? 1 : seg(lt, 0, 0.3)) * (last ? 1 : 1 - seg(lt, sc.dur - 0.3, sc.dur));
+    stage.innerHTML = DEFS + Rc(0, 0, 1080, 1920, { fill: C.bg }) + G({ opacity: a }, sc.draw(lt));
+    return t;
+  }
+  window.seek = seek;
+  window.TOTAL = TOTAL;
+  window.ready = Promise.race([
+    Promise.all([
+      document.fonts.load('700 100px "Barlow Condensed"'),
+      document.fonts.load('600 40px "Barlow Condensed"'),
+      document.fonts.load('500 40px "Be Vietnam Pro"'),
+      document.fonts.load('600 40px "Be Vietnam Pro"'),
+    ]).then(() => document.fonts.ready),
+    new Promise(r => setTimeout(r, 5000)),
+  ]);
+
+  // ===== Player =====
+  const playBtn = document.getElementById('play'), scrub = document.getElementById('scrub'), clock = document.getElementById('clock');
+  let time = +Q.get('t') || 0, playing = !CAPTURE && !Q.has('pause'), lastNow = performance.now(), drawn = -1;
+  const fmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  function tick(now) {
+    if (playing) {
+      time += (now - lastNow) / 1000;
+      if (time >= TOTAL) { time = TOTAL - 0.001; playing = false; }
+    }
+    lastNow = now;
+    if (time !== drawn) {
+      seek(time);
+      drawn = time;
+      scrub.value = (time / TOTAL) * 1000;
+      clock.textContent = `${fmt(time)} / ${fmt(TOTAL)}`;
+      playBtn.textContent = playing ? 'Pause' : 'Play';
+    }
+    requestAnimationFrame(tick);
+  }
+  playBtn.onclick = () => { if (time >= TOTAL - 0.01) time = 0; playing = !playing; playBtn.textContent = playing ? 'Pause' : 'Play'; };
+  scrub.oninput = () => { time = (scrub.value / 1000) * TOTAL; };
+  addEventListener('keydown', e => {
+    if (e.key === ' ') { e.preventDefault(); playBtn.onclick(); }
+    if (e.key === 'ArrowRight') time = Math.min(TOTAL - 0.001, time + 2);
+    if (e.key === 'ArrowLeft') time = Math.max(0, time - 2);
+  });
+  if (CAPTURE) seek(0);
+  else window.ready.then(() => { lastNow = performance.now(); requestAnimationFrame(tick); });
+})();
+</script>
+</body>
+</html>

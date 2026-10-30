@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Gạch Bông</title>
+<meta name="description" content="Type any text and get a Vietnamese cement tile (gạch bông) drawn from it, with a full floor preview. Download it as SVG or PNG.">
+<link rel="canonical" href="https://tiles.starb.ca/">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<meta property="og:title" content="Gạch Bông">
+<meta property="og:description" content="Type any text and get a Vietnamese cement tile (gạch bông) drawn from it, with a full floor preview.">
+<meta property="og:url" content="https://tiles.starb.ca/">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://tiles.starb.ca/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A floor of generated Indochine cement tiles">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Gạch Bông">
+<meta name="twitter:description" content="Type any text and get a Vietnamese cement tile (gạch bông) drawn from it, with a full floor preview.">
+<meta name="twitter:image" content="https://tiles.starb.ca/og.png">
+<meta name="twitter:image:alt" content="A floor of generated Indochine cement tiles">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Be+Vietnam+Pro:wght@400;500;600&display=swap">
+<style>
+  /* Layout: a header band with the seed controls, the tile and the floor side by side, then the about text; all stack on narrow screens. */
+  :root {
+    --ground: #e3dfd7;
+    --surface: #ece8e0;
+    --ink: #221f1b;
+    --muted: #6a645b;
+    --rule: #c8c1b5;
+    --accent: #2e5a46;
+    --on-accent: #f2eee5;
+    --shadow: rgba(40, 30, 20, 0.28);
+    --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+    --body: "Be Vietnam Pro", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #1b1a18; --surface: #262420; --ink: #ebe5d9; --muted: #a49c8f; --rule: #3d3934;
+      --accent: #86b89f; --on-accent: #11201a; --shadow: rgba(0, 0, 0, 0.6); color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #1b1a18; --surface: #262420; --ink: #ebe5d9; --muted: #a49c8f; --rule: #3d3934;
+    --accent: #86b89f; --on-accent: #11201a; --shadow: rgba(0, 0, 0, 0.6); color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font: 15px/1.5 var(--body); }
+  .wrap { max-width: 1180px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 40px; display: grid; gap: 32px; }
+  header { display: grid; gap: 16px; }
+  h1 { margin: 0; font: 700 clamp(48px, 8vw, 84px)/1 var(--display); text-transform: uppercase; letter-spacing: 0.01em; text-wrap: balance; }
+  .lede { margin: 0; color: var(--muted); max-width: 62ch; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .controls label[for="seed"] { font: 600 14px var(--display); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  #seed {
+    flex: 1 1 240px; min-width: 0; padding: 10px 14px; border: 1.5px solid var(--rule); border-radius: 6px;
+    background: var(--surface); color: var(--ink); font: 500 18px var(--body);
+  }
+  button { padding: 10px 16px; border-radius: 6px; font: 600 14px var(--body); cursor: pointer; }
+  .primary { background: var(--accent); color: var(--on-accent); border: 1.5px solid var(--accent); }
+  .ghost { background: transparent; color: var(--ink); border: 1.5px solid var(--rule); }
+  .ghost:hover { border-color: var(--accent); }
+  .toggle { display: inline-flex; gap: 8px; align-items: center; padding-inline: 4px; cursor: pointer; }
+  .toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .views { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 32px; }
+  figure { margin: 0; display: grid; gap: 14px; min-width: 0; align-content: start; }
+  figure img {
+    display: block; width: 100%; max-width: 100%; aspect-ratio: 1; background: var(--surface);
+    box-shadow: 0 1px 2px var(--shadow), 0 14px 30px -14px var(--shadow);
+  }
+  figcaption { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px 16px; }
+  .info { display: grid; gap: 4px; min-width: 0; }
+  .info strong { font: 600 15px var(--display); text-transform: uppercase; letter-spacing: 0.08em; }
+  .info span, .palette { color: var(--muted); font-size: 13px; }
+  .palette { display: flex; align-items: center; gap: 8px; }
+  #swatches { display: flex; gap: 4px; }
+  #swatches span { width: 18px; height: 18px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .about { display: grid; gap: 20px; padding-block-start: 28px; border-top: 1.5px solid var(--rule); }
+  .about h2 { margin: 0; font: 700 clamp(30px, 4vw, 40px)/1 var(--display); text-transform: uppercase; letter-spacing: 0.01em; }
+  .about-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 20px 48px; }
+  .about-cols > div { min-width: 0; max-width: 62ch; }
+  .about h3 { margin: 0 0 6px; font: 600 15px var(--display); text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); }
+  .about p { margin: 0 0 12px; }
+  .about ul { margin: 0 0 12px; padding-inline-start: 20px; display: grid; gap: 6px; }
+  footer { color: var(--muted); font-size: 13px; }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Gạch Bông</h1>
+    <p class="lede">Indochine cement tiles, drawn from a seed. Type any text: the same text always gives the same tile, and a new text gives a new pattern and palette.</p>
+    <div class="controls">
+      <label for="seed">Seed</label>
+      <input id="seed" type="text" autocomplete="off" spellcheck="false">
+      <button id="random" class="primary" type="button">Random</button>
+      <button id="copyLink" class="ghost" type="button">Copy link</button>
+      <label class="toggle"><input id="worn" type="checkbox" checked> Worn</label>
+      <span id="status" class="sr-only" role="status"></span>
+    </div>
+  </header>
+
+  <main class="views">
+    <figure>
+      <img id="tileImg" alt="">
+      <figcaption>
+        <div class="info">
+          <strong>Tile</strong>
+          <span id="tileMeta"></span>
+          <div class="palette"><div id="swatches"></div><span id="palette"></span></div>
+        </div>
+        <div class="actions">
+          <button id="tileSvg" class="ghost" type="button">Download SVG</button>
+          <button id="tilePng" class="ghost" type="button">Download PNG</button>
+        </div>
+      </figcaption>
+    </figure>
+    <figure>
+      <img id="floorImg" alt="">
+      <figcaption>
+        <div class="info">
+          <strong>Floor</strong>
+          <span>6 × 6 tiles · 1.2 × 1.2 m</span>
+        </div>
+        <div class="actions">
+          <button id="floorSvg" class="ghost" type="button">Download SVG</button>
+          <button id="floorPng" class="ghost" type="button">Download PNG</button>
+        </div>
+      </figcaption>
+    </figure>
+  </main>
+
+  <section class="about">
+    <h2>About gạch bông</h2>
+    <div class="about-cols">
+      <div>
+        <h3>The tiles</h3>
+        <p>Gạch bông means “flower tiles”. These cement tiles cover the floors of old houses, shops and pagodas in Vietnam and Cambodia. The technique came to the region in the French colonial era.</p>
+        <p>Each tile is made by hand. A worker pours colored cement into a brass mold with thin walls, one color per cell. A press then packs a plain cement backing onto the colored layer. The tile cures in water and never goes into a kiln.</p>
+        <p>This process gives the tiles their look: flat, matte color and hard edges where two colors meet. The full pattern only shows when many tiles lie together.</p>
+      </div>
+      <div>
+        <h3>The generator</h3>
+        <p>The generator copies these features of real tiles:</p>
+        <ul>
+          <li>A small palette of 3 to 5 mineral colors, such as ochre, brick red, deep green, indigo and cream.</li>
+          <li>Square symmetry: a tile looks the same after a quarter turn or a mirror flip.</li>
+          <li>Quarter motifs in the corners, which join into full medallions where four tiles meet.</li>
+          <li>Four-tile designs, where each tile is one quarter of a large cross. About a third of the seeds make one.</li>
+          <li>Thin bands of a contrasting color around petals and rings.</li>
+          <li>A worn surface with grain, faded areas and slightly uneven edges.</li>
+        </ul>
+        <p>Your text becomes a number, and that number makes every choice: palette, layout, petals, arms and wear. The same text always gives the same tile.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>Made by <a href="https://starb.ca">Minh Phu Ngo</a>. Inspired by <a href="https://github.com/LingDong-/fishdraw">fishdraw</a>.</footer>
+</div>
+
+<script src="tile.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const seedEl = $('seed'), wornEl = $('worn');
+  const WORDS = ['sen', 'cúc', 'mai', 'đào', 'lan', 'huệ', 'hồng', 'chợ lớn', 'hội an', 'phố cổ', 'hiên nhà', 'nắng', 'mưa', 'sân gạch'];
+  const PNG_SIZE = { tile: 1200, floor: 1200 };
+  const randomSeed = () => WORDS[Math.floor(Math.random() * WORDS.length)] + ' ' + Math.floor(Math.random() * 1000);
+  const slug = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/gi, 'd').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'tile';
+  const fileName = (view, ext) => `gach-bong-${slug(seedEl.value)}${view === 'floor' ? '-floor' : ''}.${ext}`;
+  const svgBlob = svg => new Blob([svg], { type: 'image/svg+xml' });
+  const urls = {};
+  let svgs = {};
+
+  function show(view, svg) {
+    if (urls[view]) URL.revokeObjectURL(urls[view]);
+    urls[view] = URL.createObjectURL(svgBlob(svg));
+    $(view + 'Img').src = urls[view];
+  }
+
+  function draw() {
+    const seed = seedEl.value;
+    const d = GachBong.design(seed);
+    const worn = wornEl.checked;
+    svgs = { tile: GachBong.render(d, { tiles: d.quad ? 2 : 1, worn }), floor: GachBong.render(d, { tiles: 6, worn }) };
+    show('tile', svgs.tile);
+    show('floor', svgs.floor);
+    $('tileImg').alt = `Cement tile for the seed "${seed}"`;
+    $('floorImg').alt = `Floor of 36 cement tiles for the seed "${seed}"`;
+    $('tileMeta').textContent = d.quad ? 'Four-tile set · each tile 20 × 20 cm, turned 90°' : 'Single tile · 20 × 20 cm';
+    $('palette').textContent = d.palette;
+    $('swatches').replaceChildren(...d.colors.map(c => {
+      const s = document.createElement('span');
+      s.style.background = c;
+      s.title = c;
+      return s;
+    }));
+    try { history.replaceState(null, '', '#' + encodeURIComponent(seed)); } catch {}
+  }
+
+  function save(name, blob) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  function toPng(svg, size) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const src = URL.createObjectURL(svgBlob(svg));
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = size;
+        canvas.getContext('2d').drawImage(img, 0, 0, size, size);
+        URL.revokeObjectURL(src);
+        canvas.toBlob(b => (b ? resolve(b) : reject(new Error('empty PNG'))), 'image/png');
+      };
+      img.onerror = reject;
+      img.src = src;
+    });
+  }
+
+  function flash(button, text) {
+    const label = button.dataset.label || (button.dataset.label = button.textContent);
+    button.textContent = $('status').textContent = text;
+    clearTimeout(button.timer);
+    button.timer = setTimeout(() => (button.textContent = label), 1600);
+  }
+
+  async function savePng(view, button) {
+    flash(button, 'Saving…');
+    try {
+      save(fileName(view, 'png'), await toPng(svgs[view], PNG_SIZE[view]));
+      flash(button, 'Saved');
+    } catch {
+      flash(button, 'PNG failed');
+    }
+  }
+
+  function setSeed(seed) {
+    seedEl.value = seed;
+    draw();
+  }
+
+  let timer;
+  seedEl.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(draw, 80);
+  });
+  wornEl.addEventListener('change', draw);
+  $('random').addEventListener('click', () => setSeed(randomSeed()));
+  $('copyLink').addEventListener('click', async e => {
+    const button = e.currentTarget;
+    const link = location.href.split('#')[0] + '#' + encodeURIComponent(seedEl.value);
+    try {
+      await navigator.clipboard.writeText(link);
+      flash(button, 'Link copied');
+    } catch {
+      flash(button, 'Copy failed');
+    }
+  });
+  $('tileSvg').addEventListener('click', () => save(fileName('tile', 'svg'), svgBlob(svgs.tile)));
+  $('floorSvg').addEventListener('click', () => save(fileName('floor', 'svg'), svgBlob(svgs.floor)));
+  $('tilePng').addEventListener('click', e => savePng('tile', e.currentTarget));
+  $('floorPng').addEventListener('click', e => savePng('floor', e.currentTarget));
+
+  const hashSeed = () => {
+    try { return decodeURIComponent(location.hash.slice(1)); } catch { return ''; }
+  };
+  addEventListener('hashchange', () => {
+    if (hashSeed() !== seedEl.value) setSeed(hashSeed());
+  });
+  setSeed(hashSeed() || randomSeed());
+</script>
+</body>
+</html>
